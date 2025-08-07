@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_PATH = os.path.join("var", "lancedb")
+DB_PATH = os.path.join("docs", "var", "lancedb")
 TABLE_NAME = "docs"
 
 
