@@ -3,6 +3,7 @@ import os
 import uuid6
 import asyncio
 import re
+from typing import cast
 
 from agent import AgentManager
 from message_splitter import split_message
@@ -10,15 +11,6 @@ from database import get_discord_db
 
 # Initialize Discord-specific database
 db = get_discord_db()
-
-# Global variables to store the current thread and ticket ID for handlers
-current_thread = None
-current_ticket_id = None
-
-# Dictionary to track which Discord thread belongs to which ticket
-thread_to_ticket = {}
-ticket_to_thread = {}
-escalated_tickets = set()  # Track escalated tickets to ignore them
 
 async def send_split_message(channel, message: str):
     """
@@ -38,30 +30,51 @@ def create_reply_handler():
     """Creates a reply handler that sends messages to the current Discord thread"""
     async def reply_handler(body, state, ticket_id=None):
         # Find the thread for this ticket
-        thread = ticket_to_thread.get(str(ticket_id)) if ticket_id else current_thread
-        if thread:
-            await send_split_message(thread, body)
-            if state == "closed":
-                await thread.edit(archived=True)
-        return {"sent": True, "ticket_id": ticket_id}
+        if ticket_id:
+            ticket = await db.get_ticket(str(ticket_id))
+            if ticket and ticket.discord_thread_id:
+                # Get the Discord channel object
+                try:
+                    channel = client.get_channel(int(ticket.discord_thread_id))
+                    if isinstance(channel, discord.Thread):
+                        await send_split_message(channel, body)
+                        if state == "closed":
+                            try:
+                                await channel.edit(archived=True)
+                            except discord.HTTPException:
+                                pass  # Thread might already be archived or permission issue
+                        return {"sent": True, "ticket_id": ticket_id}
+                except (ValueError, discord.NotFound):
+                    print(f"Could not find Discord thread {ticket.discord_thread_id} for ticket {ticket_id}")
+        return {"sent": False, "ticket_id": ticket_id}
     return reply_handler
 
 def create_escalation_handler():
     """Creates an escalation handler that notifies about escalations in the Discord thread"""
     async def escalation_handler(issue_summary: str, ticket_id=None):
         # Find the thread for this ticket
-        thread = ticket_to_thread.get(str(ticket_id)) if ticket_id else current_thread
-        if thread:
-            # Mark this ticket as escalated
-            if ticket_id:
-                escalated_tickets.add(str(ticket_id))
-            
-            escalation_message = f"🚨 **ESCALATED TO HUMAN SUPPORT** 🚨\n\n**Ticket ID:** {ticket_id}\n**Issue Summary:** {issue_summary}\n\nA human support agent will review this ticket and respond as soon as possible.\n\n*Note: This ticket is now managed by human support. The AI will no longer respond to messages in this thread.*"
-            await send_split_message(thread, escalation_message)
-            # Pin the escalation message for visibility
-            escalation_msg = await thread.send(f"📌 Ticket {ticket_id} has been escalated and is awaiting human review.")
-            await escalation_msg.pin()
-        return {"escalated": True, "summary": issue_summary, "ticket_id": ticket_id}
+        if ticket_id:
+            ticket = await db.get_ticket(str(ticket_id))
+            if ticket and ticket.discord_thread_id:
+                # Get the Discord channel object
+                try:
+                    channel = client.get_channel(int(ticket.discord_thread_id))
+                    if isinstance(channel, discord.Thread):
+                        # Mark this ticket as escalated in the database
+                        await db.update_ticket_status(str(ticket_id), "escalated", issue_summary)
+                        
+                        escalation_message = f"🚨 **ESCALATED TO HUMAN SUPPORT** 🚨\n\n**Ticket ID:** {ticket_id}\n**Issue Summary:** {issue_summary}\n\nA human support agent will review this ticket and respond as soon as possible.\n\n*Note: This ticket is now managed by human support. The AI will no longer respond to messages in this thread.*"
+                        await send_split_message(channel, escalation_message)
+                        # Pin the escalation message for visibility
+                        try:
+                            escalation_msg = await channel.send(f"📌 Ticket {ticket_id} has been escalated and is awaiting human review.")
+                            await escalation_msg.pin()
+                        except discord.HTTPException:
+                            pass  # Could not pin message, continue anyway
+                        return {"escalated": True, "summary": issue_summary, "ticket_id": ticket_id}
+                except (ValueError, discord.NotFound):
+                    print(f"Could not find Discord thread {ticket.discord_thread_id} for ticket {ticket_id}")
+        return {"escalated": False, "summary": issue_summary, "ticket_id": ticket_id}
     return escalation_handler # type: ignore
 
 async def generate_thread_summary(agent_manager, content):
@@ -121,8 +134,6 @@ async def on_message(message):
     """
     Event handler for when a message is received.
     """
-    global current_thread, current_ticket_id
-    
     print(f"{message.author.id}: {message.content}")
     
     if message.author == client.user:
@@ -132,28 +143,20 @@ async def on_message(message):
     if hasattr(message.channel, 'parent') and message.channel.parent:
         # This is a thread message
         thread_id = str(message.channel.id)
-        if thread_id in thread_to_ticket:
+        # Look up ticket by Discord thread ID
+        ticket = await db.get_ticket_by_discord_thread(thread_id)
+        if ticket:
             # This is a follow-up message in an existing ticket
-            ticket_id = thread_to_ticket[thread_id]
+            ticket_id = ticket.ticket_id
             
             # Check if this ticket has been escalated
-            if ticket_id in escalated_tickets:
+            if ticket.status == "escalated":
                 print(f"Ignoring message in escalated ticket {ticket_id}")
                 return
             
-            current_thread = message.channel
-            current_ticket_id = ticket_id
-            
-            # Try to get customer info from database first
-            existing_ticket = await db.get_ticket(ticket_id)
-            if existing_ticket:
-                customer_name = existing_ticket.customer_name
-                customer_email = existing_ticket.customer_email
-            else:
-                # Fallback to Discord info
-                customer_name = message.author.display_name or message.author.name
-                customer_email = f"{message.author.id}@discord"
-            
+            # Use customer info from database
+            customer_name = ticket.customer_name
+            customer_email = ticket.customer_email
             
             try:
                 response = await agent_manager.process_message(
@@ -164,13 +167,10 @@ async def on_message(message):
                 )
                 
                 if response:
-                    await send_split_message(current_thread, f"**Response:**\n{response}")
+                    await send_split_message(message.channel, f"**Response:**\n{response}")
                     
             except Exception as e:
-                await current_thread.send(f"❌ **Error processing message:** {str(e)}")
-            finally:
-                current_thread = None
-                current_ticket_id = None
+                await message.channel.send(f"❌ **Error processing message:** {str(e)}")
             return
 
     # Check if the bot is mentioned in the message (new ticket)
@@ -187,28 +187,27 @@ async def on_message(message):
         # Use a unique ID for the ticket
         ticket_id = str(uuid6.uuid7())
         
-        # Store the current ticket ID globally for the handlers
-        current_ticket_id = ticket_id
-        
         # Create a new thread for this ticket
-        current_thread = await message.create_thread(
-            name=f"🎫 Ticket #{ticket_id[:8]}",
+        ticket_display = ticket_id[:16].replace("-", "")
+        thread = await message.create_thread(
+            name=f"🎫 Ticket #{ticket_display}",
             auto_archive_duration=60  # Archive after 1 hour of inactivity
         )
-
-        # Track the relationship between thread and ticket
-        thread_to_ticket[str(current_thread.id)] = ticket_id
-        ticket_to_thread[ticket_id] = current_thread
-        
-        # Update the database with Discord thread ID
-        await db.update_ticket_discord_thread(ticket_id, str(current_thread.id))
 
         # Use the Discord user's info
         customer_name = message.author.display_name or message.author.name
         customer_email = f"{message.author.id}@discord"
 
+        # Create the ticket in the database with Discord thread ID
+        await db.create_ticket(
+            ticket_id=ticket_id,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            discord_thread_id=str(thread.id)
+        )
+
         # Send initial message to thread
-        await current_thread.send(f"**Ticket #{ticket_id[:16]}** - Processing your request...")
+        await thread.send(f"**Ticket #{ticket_display}** - Processing your request...")
         
         # Generate a smart summary for the thread name using OpenAI
         thread_name = await generate_thread_summary(agent_manager, content)
@@ -224,14 +223,10 @@ async def on_message(message):
             )
             
             if response:
-                await send_split_message(current_thread, f"**Response:**\n{response}")
+                await send_split_message(thread, f"**Response:**\n{response}")
                 
         except Exception as e:
-            await current_thread.send(f"❌ **Error processing request:** {str(e)}")
-        finally:
-            # Clear the current thread and ticket ID references
-            current_thread = None
-            current_ticket_id = None
+            await thread.send(f"❌ **Error processing request:** {str(e)}")
 
 
 def main():
