@@ -12,22 +12,23 @@ def demonstrate_issue_requirements():
     print("=== Discord Bot Message Length Issue - Solution Verification ===\n")
     
     print("Issue Requirements:")
-    print("1. If messages are longer than 2048 bytes, break it into multiple messages")
+    print("1. If messages are longer than 2000 bytes, break it into multiple messages") 
     print("2. If there's a markdown code block, put the block in its own message")
     print()
     
     # Requirement 1: Long message splitting
-    print("✅ REQUIREMENT 1 TEST: Messages longer than 2048 characters")
-    long_message = "This is a very long Discord message that would exceed the 2048 character limit. " * 30
-    print(f"Original message length: {len(long_message)} characters")
+    print("✅ REQUIREMENT 1 TEST: Messages longer than 2000 bytes")
+    long_message = "This is a very long Discord message that would exceed the 2000 byte limit. " * 30
+    print(f"Original message length: {len(long_message)} characters / {len(long_message.encode('utf-8'))} bytes")
     
     parts = split_message(long_message)
     print(f"Split into {len(parts)} parts:")
     for i, part in enumerate(parts, 1):
-        print(f"  Part {i}: {len(part)} characters (within limit: {len(part) <= 2048})")
+        part_bytes = len(part.encode('utf-8'))
+        print(f"  Part {i}: {len(part)} characters / {part_bytes} bytes (within limit: {part_bytes <= 2000})")
     
-    all_within_limit = all(len(part) <= 2048 for part in parts)
-    print(f"✅ All parts within 2048 character limit: {all_within_limit}\n")
+    all_within_limit = all(len(part.encode('utf-8')) <= 2000 for part in parts)
+    print(f"✅ All parts within 2000 byte limit: {all_within_limit}\n")
     
     # Requirement 2: Code block isolation
     print("✅ REQUIREMENT 2 TEST: Code blocks in their own messages")
@@ -135,11 +136,11 @@ This handles all processing steps."""
     print("=== ✅ ALL REQUIREMENTS VERIFIED SUCCESSFULLY! ===")
     print()
     print("Summary:")
-    print("✅ Messages longer than 2048 characters are split into multiple messages")
+    print("✅ Messages longer than 2000 bytes are split into multiple messages")
     print("✅ Code blocks are isolated in their own messages")
     print("✅ Multiple code blocks are handled correctly")
     print("✅ Very large code blocks are split while preserving structure")
-    print("✅ All message parts stay within Discord's 2048 character limit")
+    print("✅ All message parts stay within Discord's 2000 byte limit")
 
 
 if __name__ == "__main__":

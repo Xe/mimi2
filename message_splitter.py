@@ -1,5 +1,5 @@
 """
-Message splitting utility for Discord bot to handle messages longer than 2048 characters.
+Message splitting utility for Discord bot to handle messages longer than 2000 bytes.
 Provides special handling for markdown code blocks.
 """
 
@@ -7,13 +7,13 @@ import re
 from typing import List
 
 
-def split_message(message: str, max_length: int = 2000) -> List[str]:
+def split_message(message: str, max_length: int = 1900) -> List[str]:
     """
-    Split a message into multiple parts if it exceeds max_length.
+    Split a message into multiple parts if it exceeds max_length in bytes.
     
     Args:
         message: The message to split
-        max_length: Maximum length per message (default 2000 to leave buffer for Discord's 2048 limit)
+        max_length: Maximum byte length per message (default 1900 to leave buffer for Discord's 2000 byte limit)
     
     Returns:
         List of message parts, with code blocks isolated in separate messages
@@ -28,7 +28,7 @@ def split_message(message: str, max_length: int = 2000) -> List[str]:
     # If there are code blocks, handle them specially regardless of message length
     if code_blocks:
         return _split_message_with_code_blocks(message, code_blocks, max_length)
-    elif len(message) <= max_length:
+    elif len(message.encode('utf-8')) <= max_length:
         return [message]
     else:
         return _split_plain_message(message, max_length)
@@ -58,14 +58,14 @@ def _split_message_with_code_blocks(message: str, code_blocks: List[str], max_le
                 current_part = ""
             
             # Add code block as its own message(s)
-            if len(segment) <= max_length:
+            if len(segment.encode('utf-8')) <= max_length:
                 parts.append(segment)
             else:
                 # If code block is too long, split it but preserve the structure
                 parts.extend(_split_large_code_block(segment, max_length))
         else:
             # Regular text segment
-            if len(current_part + segment) <= max_length:
+            if len((current_part + segment).encode('utf-8')) <= max_length:
                 current_part += segment
             else:
                 # Flush current part and start new one
@@ -92,17 +92,17 @@ def _split_large_code_block(code_block: str, max_length: int) -> List[str]:
     
     parts = []
     current_lines = []
-    current_length = len(first_line) + len(last_line) + 2  # +2 for newlines
+    current_length = len(first_line.encode('utf-8')) + len(last_line.encode('utf-8')) + 2  # +2 for newlines
     
     for line in content_lines:
-        line_length = len(line) + 1  # +1 for newline
+        line_length = len(line.encode('utf-8')) + 1  # +1 for newline
         
         if current_length + line_length > max_length and current_lines:
             # Create a code block with current lines
             code_part = first_line + '\n' + '\n'.join(current_lines) + '\n' + last_line
             parts.append(code_part)
             current_lines = [line]
-            current_length = len(first_line) + len(last_line) + line_length + 2
+            current_length = len(first_line.encode('utf-8')) + len(last_line.encode('utf-8')) + line_length + 2
         else:
             current_lines.append(line)
             current_length += line_length
@@ -119,7 +119,7 @@ def _split_plain_message(message: str, max_length: int) -> List[str]:
     """
     Split a plain text message without code blocks.
     """
-    if len(message) <= max_length:
+    if len(message.encode('utf-8')) <= max_length:
         return [message]
     
     parts = []
@@ -129,11 +129,9 @@ def _split_plain_message(message: str, max_length: int) -> List[str]:
     sentences = re.split(r'(?<=[.!?])\s+', message)
     
     for sentence in sentences:
-        if len(current_part + sentence) <= max_length:
-            if current_part:
-                current_part += " " + sentence
-            else:
-                current_part = sentence
+        test_part = current_part + " " + sentence if current_part else sentence
+        if len(test_part.encode('utf-8')) <= max_length:
+            current_part = test_part
         else:
             # Flush current part
             if current_part:
@@ -141,7 +139,7 @@ def _split_plain_message(message: str, max_length: int) -> List[str]:
                 current_part = ""
             
             # If sentence is still too long, split by words
-            if len(sentence) > max_length:
+            if len(sentence.encode('utf-8')) > max_length:
                 parts.extend(_split_by_words(sentence, max_length))
             else:
                 current_part = sentence
@@ -162,11 +160,9 @@ def _split_by_words(text: str, max_length: int) -> List[str]:
     current_part = ""
     
     for word in words:
-        if len(current_part + " " + word) <= max_length:
-            if current_part:
-                current_part += " " + word
-            else:
-                current_part = word
+        test_part = current_part + " " + word if current_part else word
+        if len(test_part.encode('utf-8')) <= max_length:
+            current_part = test_part
         else:
             # Flush current part
             if current_part:
@@ -174,10 +170,24 @@ def _split_by_words(text: str, max_length: int) -> List[str]:
                 current_part = word
             
             # If single word is still too long, split it (edge case)
-            if len(word) > max_length:
+            if len(word.encode('utf-8')) > max_length:
                 # Split the word itself as last resort
-                for i in range(0, len(word), max_length):
-                    parts.append(word[i:i + max_length])
+                word_bytes = word.encode('utf-8')
+                for i in range(0, len(word_bytes), max_length):
+                    chunk = word_bytes[i:i + max_length]
+                    # Ensure we don't split in the middle of a multi-byte character
+                    try:
+                        parts.append(chunk.decode('utf-8'))
+                    except UnicodeDecodeError:
+                        # Find the last complete character boundary
+                        for j in range(len(chunk) - 1, -1, -1):
+                            try:
+                                parts.append(chunk[:j].decode('utf-8'))
+                                # Add the remaining bytes to the next iteration
+                                word_bytes = chunk[j:] + word_bytes[i + max_length:]
+                                break
+                            except UnicodeDecodeError:
+                                continue
                 current_part = ""
     
     # Add any remaining content

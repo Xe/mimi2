@@ -21,22 +21,22 @@ class TestMessageSplitter(unittest.TestCase):
     
     def test_message_at_limit(self):
         """Test that messages at exactly the limit are not split."""
-        message = "x" * 2000
+        message = "x" * 1900  # Using default byte limit
         result = split_message(message)
         self.assertEqual(result, [message])
     
     def test_message_over_limit_no_code_blocks(self):
         """Test splitting of long messages without code blocks."""
         # Create a message that's definitely over the limit
-        message = "This is a long message. " * 100  # ~2400 characters
+        message = "This is a long message. " * 100  # ~2400 characters/bytes
         result = split_message(message)
         
         # Should be split into multiple parts
         self.assertGreater(len(result), 1)
         
-        # Each part should be under the limit
+        # Each part should be under the limit in bytes
         for part in result:
-            self.assertLessEqual(len(part), 2000)
+            self.assertLessEqual(len(part.encode('utf-8')), 1900)
         
         # When rejoined, should contain the same content (minus extra spaces)
         rejoined = " ".join(result)
@@ -100,7 +100,7 @@ Final text."""
     def test_very_large_code_block(self):
         """Test splitting of code blocks that exceed the message limit."""
         # Create a large code block
-        large_code = "print('line')\n" * 200  # ~2600 characters
+        large_code = "print('line')\n" * 200  # ~2600 characters/bytes
         message = f"```python\n{large_code}```"
         
         result = split_message(message)
@@ -108,9 +108,9 @@ Final text."""
         # Should be split into multiple parts
         self.assertGreater(len(result), 1)
         
-        # Each part should be under the limit
+        # Each part should be under the limit in bytes
         for part in result:
-            self.assertLessEqual(len(part), 2000)
+            self.assertLessEqual(len(part.encode('utf-8')), 1900)
         
         # All parts should maintain code block structure
         for part in result:
@@ -149,9 +149,9 @@ Final thoughts. """ * 10
         # Should be split into multiple parts
         self.assertGreater(len(result), 3)
         
-        # Each part should be under the limit
+        # Each part should be under the limit in bytes
         for part in result:
-            self.assertLessEqual(len(part), 2000)
+            self.assertLessEqual(len(part.encode('utf-8')), 1900)
         
         # Should preserve code blocks
         python_found = False
@@ -204,6 +204,27 @@ def hello():
             words = part.strip().split()
             for word in words:
                 self.assertNotIn(' ', word.strip())  # No spaces within words
+
+    def test_utf8_multibyte_characters(self):
+        """Test that messages with UTF-8 multi-byte characters are handled correctly."""
+        # Use emojis and special characters that are multiple bytes
+        message = "Hello! 🚀 This message contains émojis 🎉 and spëcial characters 💖 " * 20
+        result = split_message(message, max_length=100)
+        
+        # Should be split into multiple parts
+        self.assertGreater(len(result), 1)
+        
+        # Each part should be under the byte limit
+        for part in result:
+            self.assertLessEqual(len(part.encode('utf-8')), 100)
+        
+        # Content should be preserved
+        rejoined = "".join(result)
+        self.assertIn("🚀", rejoined)
+        self.assertIn("🎉", rejoined)
+        self.assertIn("💖", rejoined)
+        self.assertIn("émojis", rejoined)
+        self.assertIn("spëcial", rejoined)
 
 
 if __name__ == "__main__":

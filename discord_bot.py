@@ -18,7 +18,7 @@ escalated_tickets = set()  # Track escalated tickets to ignore them
 
 async def send_split_message(channel, message: str):
     """
-    Send a message that may need to be split into multiple parts due to Discord's 2048 character limit.
+    Send a message that may need to be split into multiple parts due to Discord's 2000 byte limit.
     Code blocks will be isolated in separate messages.
     """
     if not message:
