@@ -19,26 +19,28 @@ WORKDIR /app
 # Copy dependency files
 COPY --chown=mimi2:mimi2 pyproject.toml uv.lock ./
 
-# Install dependencies with fallback to pip
-RUN uv sync --frozen --no-cache || \
-    (pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-     aiosqlite==0.21.0 \
-     discord-py==2.5.2 \
-     duckdb==1.3.2 \
-     lancedb==0.24.2 \
-     ollama==0.5.2 \
-     openai==1.99.1 \
-     pandas==2.3.1 \
-     pip==25.2 \
-     pyarrow==21.0.0 \
-     python-dotenv==1.1.1 \
-     uuid6==2025.0.1)
+# Install dependencies using pip
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
+    aiosqlite==0.21.0 \
+    discord-py==2.5.2 \
+    duckdb==1.3.2 \
+    lancedb==0.24.2 \
+    ollama==0.5.2 \
+    openai==1.99.1 \
+    pandas==2.3.1 \
+    pyarrow==21.0.0 \
+    python-dotenv==1.1.1 \
+    uuid6==2025.0.1
 
 # Copy application code
 COPY --chown=mimi2:mimi2 . .
 
-# Make sure the virtual environment is in PATH (or system packages if using pip)
-ENV PATH="/app/.venv/bin:$PATH"
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/var && chown -R mimi2:mimi2 /app/var
+
+# Make sure the packages are in PATH and current dir is in PYTHONPATH
+ENV PATH="/usr/local/bin:$PATH"
+ENV PYTHONPATH="/app:$PYTHONPATH"
 
 # Switch to non-root user
 USER mimi2

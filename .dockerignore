@@ -3,9 +3,8 @@
 .gitignore
 .gitattributes
 
-# Documentation
+# Documentation files (but not the docs code directory)
 README.md
-docs/
 *.md
 
 # IDE and editors
