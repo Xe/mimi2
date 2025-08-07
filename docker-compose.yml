@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  mimi2:
+    build: .
+    image: mimi2:latest
+    container_name: mimi2
+    restart: unless-stopped
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gpt-oss:20b}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-ollama}
+    volumes:
+      # Mount system prompt file if it exists
+      - ./system_prompt.md:/app/system_prompt.md:ro
+      # Mount .env file if it exists
+      - ./.env:/app/.env:ro
+    depends_on:
+      - ollama
+    networks:
+      - mimi2-network
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - mimi2-network
+
+volumes:
+  ollama-data:
+
+networks:
+  mimi2-network:
+    driver: bridge
