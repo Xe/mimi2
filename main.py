@@ -52,7 +52,7 @@ def note(text):
 
 
 def reply(body, state="open"):
-    print(f"State: {state}\nReply:\n{body}")
+    print(f"\nState: {state}\nReply:\n{body}")
     # Returns the email body to send
     return body
 
@@ -136,18 +136,6 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "wait_for_reply",
-            "description": "Leave an internal note.",
-            "parameters": {
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "reply",
             "description": "Send a user-facing email reply.",
             "parameters": {
@@ -159,7 +147,7 @@ TOOL_DEFINITIONS = [
                         "enum": [
                             "closed",
                             "wait_for_reply",
-                            "escalate",
+                            "escalate_to_human",
                         ]
                     }
                 },
@@ -194,9 +182,13 @@ def invoke_agent(ticket_id, customer_name, customer_email, user_message):
             model=os.getenv("OLLAMA_MODEL", "gpt-oss:20b"),
             messages=messages,  # type: ignore
             tools=TOOL_DEFINITIONS,  # type: ignore
-            tool_choice="auto"
+            tool_choice="auto",
+            reasoning_effort="high"
         )
         msg = response.choices[0].message
+        msg_dict = msg.to_dict()
+        if "reasoning" in msg_dict:
+            print(msg_dict["reasoning"])
 
         if msg.tool_calls:
             # Process tool calls
@@ -233,7 +225,7 @@ def invoke_agent(ticket_id, customer_name, customer_email, user_message):
                     sent_reply = True
                     
             if sent_reply:
-                return "sent a reply"
+                return msg.content
             continue
 
         return msg.content
