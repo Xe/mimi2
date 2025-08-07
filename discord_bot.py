@@ -13,6 +13,7 @@ current_ticket_id = None
 # Dictionary to track which Discord thread belongs to which ticket
 thread_to_ticket = {}
 ticket_to_thread = {}
+escalated_tickets = set()  # Track escalated tickets to ignore them
 
 def create_reply_handler():
     """Creates a reply handler that sends messages to the current Discord thread"""
@@ -32,7 +33,11 @@ def create_escalation_handler():
         # Find the thread for this ticket
         thread = ticket_to_thread.get(str(ticket_id)) if ticket_id else current_thread
         if thread:
-            escalation_message = f"🚨 **ESCALATED TO HUMAN SUPPORT** 🚨\n\n**Ticket ID:** {ticket_id}\n**Issue Summary:** {issue_summary}\n\nA human support agent will review this ticket and respond as soon as possible."
+            # Mark this ticket as escalated
+            if ticket_id:
+                escalated_tickets.add(str(ticket_id))
+            
+            escalation_message = f"🚨 **ESCALATED TO HUMAN SUPPORT** 🚨\n\n**Ticket ID:** {ticket_id}\n**Issue Summary:** {issue_summary}\n\nA human support agent will review this ticket and respond as soon as possible.\n\n*Note: This ticket is now managed by human support. The AI will no longer respond to messages in this thread.*"
             await thread.send(escalation_message)
             # Pin the escalation message for visibility
             escalation_msg = await thread.send(f"📌 Ticket {ticket_id} has been escalated and is awaiting human review.")
@@ -107,6 +112,12 @@ async def on_message(message):
         if thread_id in thread_to_ticket:
             # This is a follow-up message in an existing ticket
             ticket_id = thread_to_ticket[thread_id]
+            
+            # Check if this ticket has been escalated
+            if ticket_id in escalated_tickets:
+                print(f"Ignoring message in escalated ticket {ticket_id}")
+                return
+            
             current_thread = message.channel
             current_ticket_id = ticket_id
             
@@ -164,7 +175,11 @@ async def on_message(message):
         customer_email = f"{message.author.id}@discord"
 
         # Send initial message to thread
-        await current_thread.send(f"**Ticket #{ticket_id[:8]}** - Processing your request...")
+        await current_thread.send(f"**Ticket #{ticket_id[:16]}** - Processing your request...")
+        
+        # Generate a smart summary for the thread name using OpenAI
+        thread_name = await generate_thread_summary(agent_manager, content)
+        print(f"{ticket_id}: {thread_name}")
 
         # Process the initial message
         try:
