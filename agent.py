@@ -140,7 +140,6 @@ class Agent:
                                 "enum": [
                                     "closed",
                                     "wait_for_reply",
-                                    "escalate_to_human",
                                 ],
                             },
                         },
@@ -223,7 +222,7 @@ class Agent:
         ))
         return {"noted": True}
 
-    async def reply(self, body, state="open", **kwargs):
+    async def reply(self, body="", state="open", **kwargs):
         """
         Sends a reply to the user.
         """
