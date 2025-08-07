@@ -69,3 +69,62 @@ Make sure you have:
 - `escalate(issue_summary)` - Escalate to human support
 - `close(reason)` - Close tickets
 - `python(code)` - Execute Python diagnostics
+
+## Docker Deployment
+
+### Building the Docker Image
+
+```bash
+docker build -t mimi2 .
+```
+
+### Running with Docker Compose
+
+The easiest way to run mimi2 with all dependencies:
+
+```bash
+docker-compose up -d
+```
+
+This will start both mimi2 and an Ollama server with the necessary configuration.
+
+### Running the Container Manually
+
+```bash
+# Run with custom environment variables
+docker run -d \
+  --name mimi2 \
+  -e OLLAMA_URL=http://your-ollama-server:11434 \
+  -e OLLAMA_MODEL=your-model \
+  -e OPENAI_API_KEY=your-api-key \
+  mimi2:latest
+```
+
+### Kubernetes Deployment
+
+Deploy to Kubernetes using the provided manifests:
+
+```bash
+kubectl apply -f k8s/deployment.yaml
+```
+
+This will create:
+- A dedicated namespace (`mimi2`)
+- Deployment for mimi2 application
+- Deployment for Ollama server
+- Services for internal communication
+- ConfigMap for environment variables
+
+### GitHub Container Registry
+
+Pre-built images are available from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/xe/mimi2:latest
+```
+
+Available tags:
+- `latest` - Latest stable release from main branch
+- `main` - Latest build from main branch
+- `<branch-name>` - Builds from specific branches
+- `<tag>` - Tagged releases
