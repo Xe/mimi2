@@ -208,10 +208,6 @@ async def on_message(message):
 
         # Send initial message to thread
         await thread.send(f"**Ticket #{ticket_display}** - Processing your request...")
-        
-        # Generate a smart summary for the thread name using OpenAI
-        thread_name = await generate_thread_summary(agent_manager, content)
-        print(f"{ticket_id}: {thread_name}")
 
         # Process the initial message
         try:
