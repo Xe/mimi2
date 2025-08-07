@@ -5,6 +5,7 @@ import asyncio
 import re
 
 from agent import AgentManager
+from message_splitter import split_message
 
 # Global variables to store the current thread and ticket ID for handlers
 current_thread = None
@@ -15,13 +16,27 @@ thread_to_ticket = {}
 ticket_to_thread = {}
 escalated_tickets = set()  # Track escalated tickets to ignore them
 
+async def send_split_message(channel, message: str):
+    """
+    Send a message that may need to be split into multiple parts due to Discord's 2000 byte limit.
+    Code blocks will be isolated in separate messages.
+    """
+    if not message:
+        return
+    
+    message_parts = split_message(message)
+    
+    for part in message_parts:
+        if part.strip():  # Only send non-empty parts
+            await channel.send(part)
+
 def create_reply_handler():
     """Creates a reply handler that sends messages to the current Discord thread"""
     async def reply_handler(body, state, ticket_id=None):
         # Find the thread for this ticket
         thread = ticket_to_thread.get(str(ticket_id)) if ticket_id else current_thread
         if thread:
-            await thread.send(body)
+            await send_split_message(thread, body)
             if state == "closed":
                 await thread.edit(archived=True)
         return {"sent": True, "ticket_id": ticket_id}
@@ -38,7 +53,7 @@ def create_escalation_handler():
                 escalated_tickets.add(str(ticket_id))
             
             escalation_message = f"🚨 **ESCALATED TO HUMAN SUPPORT** 🚨\n\n**Ticket ID:** {ticket_id}\n**Issue Summary:** {issue_summary}\n\nA human support agent will review this ticket and respond as soon as possible.\n\n*Note: This ticket is now managed by human support. The AI will no longer respond to messages in this thread.*"
-            await thread.send(escalation_message)
+            await send_split_message(thread, escalation_message)
             # Pin the escalation message for visibility
             escalation_msg = await thread.send(f"📌 Ticket {ticket_id} has been escalated and is awaiting human review.")
             await escalation_msg.pin()
@@ -134,7 +149,7 @@ async def on_message(message):
                 )
                 
                 if response:
-                    await current_thread.send(f"**Response:**\n{response}")
+                    await send_split_message(current_thread, f"**Response:**\n{response}")
                     
             except Exception as e:
                 await current_thread.send(f"❌ **Error processing message:** {str(e)}")
@@ -191,7 +206,7 @@ async def on_message(message):
             )
             
             if response:
-                await current_thread.send(f"**Response:**\n{response}")
+                await send_split_message(current_thread, f"**Response:**\n{response}")
                 
         except Exception as e:
             await current_thread.send(f"❌ **Error processing request:** {str(e)}")
