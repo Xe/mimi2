@@ -1,12 +1,14 @@
 import json
 import os
 import asyncio
+import time
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from docs.search import search as docs_search
+from database import db, ConversationDB
 
 
 class AgentManager:
@@ -14,10 +16,15 @@ class AgentManager:
     Manages multiple agent instances, one per ticket.
     """
     
-    def __init__(self, reply_handler=None, escalation_handler=None):
+    def __init__(self, reply_handler=None, escalation_handler=None, db=None):
         self.agents: Dict[str, Agent] = {}
         self.reply_handler = reply_handler
         self.escalation_handler = escalation_handler
+        self.db = db if db is not None else globals()["db"]
+    
+    async def initialize(self):
+        """Initialize the database."""
+        await self.db.initialize()
     
     def get_or_create_agent(self, ticket_id: str) -> "Agent":
         """
@@ -27,7 +34,8 @@ class AgentManager:
             self.agents[ticket_id] = Agent(
                 ticket_id=ticket_id,
                 reply_handler=self.reply_handler,
-                escalation_handler=self.escalation_handler
+                escalation_handler=self.escalation_handler,
+                db=self.db
             )
         return self.agents[ticket_id]
     
@@ -47,6 +55,10 @@ class AgentManager:
         # Set customer info if this is the first time we're seeing this ticket
         if agent.customer_info is None:
             agent.set_customer_info(customer_name, customer_email)
+            # Create ticket in database if it doesn't exist
+            existing_ticket = await self.db.get_ticket(ticket_id)
+            if not existing_ticket:
+                await self.db.create_ticket(ticket_id, customer_name, customer_email)
         
         return await agent.process_message(user_message)
 
@@ -56,13 +68,13 @@ class Agent:
     An AI agent that maintains conversation state for a specific ticket.
     """
 
-    def __init__(self, ticket_id, reply_handler=None, escalation_handler=None):
+    def __init__(self, ticket_id, reply_handler=None, escalation_handler=None, db=None):
         """
         Initializes the Agent for a specific ticket.
         """
         load_dotenv()
         self.client = AsyncOpenAI(
-            base_url=os.getenv("OLLAMA_URL", "http://localhost:11434") + "/v1",
+            base_url=os.getenv("OLLAMA_URL", "http://localhost:11434/v1"),
             api_key=os.getenv("OPENAI_API_KEY", "ollama"),
         )
         self.system_prompt = self._load_system_prompt()
@@ -72,6 +84,8 @@ class Agent:
         self.ticket_id = ticket_id
         self.messages = [{"role": "system", "content": self.system_prompt}]
         self.customer_info = None
+        self.db = db or ConversationDB()
+        self.current_message_id = None  # Track current message for tool usage
 
     def _load_system_prompt(self):
         """
@@ -146,18 +160,6 @@ class Agent:
                     },
                 },
             },
-            # {
-            #     "type": "function",
-            #     "function": {
-            #         "name": "python",
-            #         "description": "Execute Python code for diagnostics.",
-            #         "parameters": {
-            #             "type": "object",
-            #             "properties": {"code": {"type": "string"}},
-            #             "required": ["code"],
-            #         },
-            #     },
-            # },
         ]
 
     # --- Tool Implementations ---
@@ -167,54 +169,149 @@ class Agent:
         Searches the knowledge base for a given query.
         """
         print(f"[DOCS] {query}")
-        return docs_search(query, limit=10)
+        start_time = time.time()
+        
+        try:
+            df = docs_search(query, limit=10)
+            if df is None or len(df) == 0:
+                result = []
+            else:
+                results = []
+                for i, row in enumerate(df.itertuples(index=False), start=1):
+                    file_path = str(getattr(row, "file_path", ""))
+                    section = int(getattr(row, "section", 0))
+                    text_val = getattr(row, "text", "")
+                    text_str = text_val.decode("utf-8", errors="ignore") if isinstance(text_val, (bytes, bytearray)) else str(text_val)
+                    
+                    result_dict = {
+                        "rank": i,
+                        "file_path": file_path,
+                        "section": section,
+                        "reference": f"{file_path}#section-{section}",
+                        "text": text_str
+                    }
+                    results.append(result_dict)
+                result = results
+            
+            # Record tool usage
+            execution_time = (time.time() - start_time) * 1000
+            asyncio.create_task(self.db.record_tool_usage(
+                self.ticket_id, self.current_message_id, "lookup_knowledgebase",
+                {"query": query}, result, execution_time
+            ))
+            
+            return result
+        except Exception as e:
+            print(f"[ERROR] Knowledge base search failed: {e}")
+            # Record failed tool usage
+            execution_time = (time.time() - start_time) * 1000
+            asyncio.create_task(self.db.record_tool_usage(
+                self.ticket_id, self.current_message_id, "lookup_knowledgebase",
+                {"query": query}, {"error": str(e)}, execution_time
+            ))
+            return []
 
     def note(self, text):
         """
         Creates an internal note.
         """
         print(f"[NOTE] {text}")
+        # Record tool usage
+        asyncio.create_task(self.db.record_tool_usage(
+            self.ticket_id, self.current_message_id, "note",
+            {"text": text}, {"noted": True}, None
+        ))
+        return {"noted": True}
 
-    async def reply(self, body, state="open"):
+    async def reply(self, body, state="open", **kwargs):
         """
         Sends a reply to the user.
         """
+        start_time = time.time()
+        
+        # Update ticket status in database
+        await self.db.update_ticket_status(self.ticket_id, state)
+        
+        result = None
         if self.reply_handler is not None:
             if asyncio.iscoroutinefunction(self.reply_handler):
-                return await self.reply_handler(body=body, state=state, ticket_id=self.ticket_id)
+                result = await self.reply_handler(body=body, state=state, ticket_id=self.ticket_id)
             else:
-                return self.reply_handler(body=body, state=state, ticket_id=self.ticket_id)
+                result = self.reply_handler(body=body, state=state, ticket_id=self.ticket_id)
         else:
             print(f"\nTicket {self.ticket_id} - State: {state}\nReply:\n{body}")
-            return body
+            result = body
+        
+        # Record tool usage
+        execution_time = (time.time() - start_time) * 1000
+        await self.db.record_tool_usage(
+            self.ticket_id, self.current_message_id, "reply",
+            {"body": body, "state": state}, result, execution_time
+        )
+        
+        return result
 
     async def escalate(self, issue_summary):
         """
         Escalates an issue to human support.
         """
+        start_time = time.time()
+        
+        # Update ticket status in database
+        await self.db.update_ticket_status(self.ticket_id, "escalated", issue_summary)
+        
+        result = None
         if self.escalation_handler is not None:
             if asyncio.iscoroutinefunction(self.escalation_handler):
-                return await self.escalation_handler(issue_summary=issue_summary, ticket_id=self.ticket_id)
+                result = await self.escalation_handler(issue_summary=issue_summary, ticket_id=self.ticket_id)
             else:
-                return self.escalation_handler(issue_summary=issue_summary, ticket_id=self.ticket_id)
+                result = self.escalation_handler(issue_summary=issue_summary, ticket_id=self.ticket_id)
         else:
             print(f"[ESCALATE] Ticket {self.ticket_id}: {issue_summary}")
-            return "Issue escalated to human support."
+            result = "Issue escalated to human support."
+        
+        # Record tool usage
+        execution_time = (time.time() - start_time) * 1000
+        await self.db.record_tool_usage(
+            self.ticket_id, self.current_message_id, "escalate",
+            {"issue_summary": issue_summary}, result, execution_time
+        )
+        
+        return result
 
     def close(self, reason):
         """
         Closes the support ticket.
         """
         print(f"[CLOSE] {reason}")
+        # Record tool usage
+        asyncio.create_task(self.db.record_tool_usage(
+            self.ticket_id, self.current_message_id, "close",
+            {"reason": reason}, {"closed": True}, None
+        ))
+        # Update ticket status
+        asyncio.create_task(self.db.update_ticket_status(self.ticket_id, "closed"))
         return f"Ticket closed: {reason}"
 
     def python(self, code):
         """
         Executes Python code.
         """
-        local_vars = {}
-        exec(code, {}, local_vars)
-        return local_vars
+        start_time = time.time()
+        try:
+            local_vars = {}
+            exec(code, {}, local_vars)
+            result = local_vars
+        except Exception as e:
+            result = {"error": str(e)}
+        
+        # Record tool usage
+        execution_time = (time.time() - start_time) * 1000
+        asyncio.create_task(self.db.record_tool_usage(
+            self.ticket_id, self.current_message_id, "python",
+            {"code": code}, result, execution_time
+        ))
+        return result
 
     def wait_for_reply(self, note):
         """
@@ -231,16 +328,39 @@ class Agent:
             "email": customer_email
         }
 
+    async def load_conversation_history(self):
+        """
+        Load existing conversation history from database and restore agent state.
+        """
+        try:
+            # Get existing messages and restore conversation state
+            stored_messages = await self.db.recreate_conversation_for_agent(self.ticket_id)
+            if stored_messages:
+                # Keep only the system message and append stored messages
+                self.messages = [self.messages[0]] + stored_messages
+                print(f"[DB] Restored {len(stored_messages)} messages for ticket {self.ticket_id}")
+        except Exception as e:
+            print(f"[DB] Failed to load conversation history: {e}")
+
     async def process_message(self, user_message):
         """
         Processes a new message from the user and returns the agent's response.
         This method accumulates conversation history and can be called multiple times.
         """
-        # Add the user message to the conversation history
+        # Load existing conversation history if this is the first message processing
+        if len(self.messages) == 1:  # Only system message
+            await self.load_conversation_history()
+        
+        # Store the user message in database
         if self.customer_info:
             formatted_message = f"Customer: {self.customer_info['name']} ({self.customer_info['email']})\nMessage: {user_message}"
         else:
             formatted_message = user_message
+        
+        user_msg = await self.db.add_message(
+            self.ticket_id, "user", formatted_message,
+            metadata={"original_content": user_message, "customer_info": self.customer_info}
+        )
             
         self.messages.append({"role": "user", "content": formatted_message})
 
@@ -258,6 +378,20 @@ class Agent:
                 print(f"[REASONING] Ticket {self.ticket_id}: {msg_dict['reasoning']}")
 
             if msg.tool_calls:
+                # Store assistant message with tool calls
+                assistant_msg = await self.db.add_message(
+                    self.ticket_id, "assistant", msg.content or "",
+                    tool_calls=[{
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    } for tc in msg.tool_calls]
+                )
+                self.current_message_id = assistant_msg.message_id
+                
                 # Add the assistant's message with tool calls to history
                 msg_dict = {"role": "assistant", "content": msg.content}
                 if msg.tool_calls:
@@ -287,6 +421,13 @@ class Agent:
                     else:
                         result = method(**fn_args)
                     
+                    # Store tool result message
+                    await self.db.add_message(
+                        self.ticket_id, "tool", json.dumps(result),
+                        metadata={"tool_name": fn_name, "tool_args": fn_args},
+                        tool_call_id=tool_call.id
+                    )
+                    
                     # Add the tool result to conversation history
                     self.messages.append(
                         {
@@ -303,6 +444,10 @@ class Agent:
                 if sent_reply:
                     # Add the final assistant response to history
                     if msg.content:
+                        await self.db.add_message(
+                            self.ticket_id, "assistant", msg.content,
+                            metadata={"final_response": True}
+                        )
                         self.messages.append({"role": "assistant", "content": msg.content})
                     return msg.content or ""
                 continue
@@ -310,6 +455,10 @@ class Agent:
                 # No tool calls, add the response to history and return
                 content = msg.content or ""
                 if content:
+                    await self.db.add_message(
+                        self.ticket_id, "assistant", content,
+                        metadata={"direct_response": True}
+                    )
                     self.messages.append({"role": "assistant", "content": content})
                 return content
 

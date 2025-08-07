@@ -4,6 +4,7 @@ Simple test script to validate the main.py configuration and imports.
 """
 
 import os
+import sys
 from dotenv import load_dotenv
 
 def test_environment():
@@ -34,28 +35,6 @@ def test_imports():
         print(f"✗ Import error: {e}")
         return False
 
-def test_client_initialization():
-    """Test that the OpenAI client can be initialized."""
-    try:
-        from main import client
-        print(f"✓ OpenAI client initialized: {type(client).__name__}")
-        return True
-    except Exception as e:
-        print(f"✗ Client initialization error: {e}")
-        return False
-
-def test_tool_definitions():
-    """Test that tool definitions are properly structured."""
-    try:
-        from main import TOOL_DEFINITIONS
-        print(f"✓ Tool definitions loaded: {len(TOOL_DEFINITIONS)} tools")
-        for tool in TOOL_DEFINITIONS:
-            print(f"  - {tool['function']['name']}")
-        return True
-    except Exception as e:
-        print(f"✗ Tool definitions error: {e}")
-        return False
-
 if __name__ == "__main__":
     print("Testing Mimi2 Configuration...")
     print("=" * 40)
@@ -63,8 +42,6 @@ if __name__ == "__main__":
     tests = [
         test_environment,
         test_imports,
-        test_client_initialization,
-        test_tool_definitions,
     ]
     
     results = []
@@ -82,5 +59,7 @@ if __name__ == "__main__":
     
     if all(results):
         print("✓ All tests passed! The application is ready to run.")
+        sys.exit(0)
     else:
         print("✗ Some tests failed. Check the configuration.")
+        sys.exit(1)

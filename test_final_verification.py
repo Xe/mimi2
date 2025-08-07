@@ -3,6 +3,8 @@
 Final end-to-end verification test for Discord bot message splitting.
 """
 
+import sys
+
 def test_end_to_end():
     try:
         import discord_bot
@@ -38,4 +40,5 @@ def test_end_to_end():
         return False
 
 if __name__ == "__main__":
-    test_end_to_end()
+    success = test_end_to_end()
+    sys.exit(0 if success else 1)

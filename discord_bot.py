@@ -6,6 +6,10 @@ import re
 
 from agent import AgentManager
 from message_splitter import split_message
+from database import get_discord_db
+
+# Initialize Discord-specific database
+db = get_discord_db()
 
 # Global variables to store the current thread and ticket ID for handlers
 current_thread = None
@@ -93,7 +97,8 @@ async def generate_thread_summary(agent_manager, content):
 # --- Bot Setup ---
 agent_manager = AgentManager(
     reply_handler=create_reply_handler(),
-    escalation_handler=create_escalation_handler()
+    escalation_handler=create_escalation_handler(),
+    db=db  # Use Discord-specific database
 )
 intents = discord.Intents.default()
 intents.message_content = True
@@ -106,6 +111,9 @@ async def on_ready():
     Event handler for when the bot is ready.
     """
     print(f"We have logged in as {client.user}")
+    # Initialize the database when the bot starts
+    await agent_manager.initialize()
+    print("Database initialized successfully")
 
 
 @client.event
@@ -136,8 +144,15 @@ async def on_message(message):
             current_thread = message.channel
             current_ticket_id = ticket_id
             
-            customer_name = message.author.display_name or message.author.name
-            customer_email = f"{message.author.id}@discord"
+            # Try to get customer info from database first
+            existing_ticket = await db.get_ticket(ticket_id)
+            if existing_ticket:
+                customer_name = existing_ticket.customer_name
+                customer_email = existing_ticket.customer_email
+            else:
+                # Fallback to Discord info
+                customer_name = message.author.display_name or message.author.name
+                customer_email = f"{message.author.id}@discord"
             
             
             try:
@@ -184,6 +199,9 @@ async def on_message(message):
         # Track the relationship between thread and ticket
         thread_to_ticket[str(current_thread.id)] = ticket_id
         ticket_to_thread[ticket_id] = current_thread
+        
+        # Update the database with Discord thread ID
+        await db.update_ticket_discord_thread(ticket_id, str(current_thread.id))
 
         # Use the Discord user's info
         customer_name = message.author.display_name or message.author.name
