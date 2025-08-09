@@ -1,0 +1,20 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Development environment
+.devcontainer
+.vscode
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Documentation
+README.md
