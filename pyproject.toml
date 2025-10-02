@@ -17,3 +17,8 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "uuid6>=2025.0.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0.3",
+]

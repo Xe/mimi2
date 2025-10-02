@@ -364,14 +364,23 @@ class Agent:
         self.messages.append({"role": "user", "content": formatted_message})
 
         while True:
+            start = time.time()
             response = await self.client.chat.completions.create(
                 model=os.getenv("OLLAMA_MODEL", "gpt-oss:20b"),
                 messages=self.messages,  # type: ignore
                 tools=self.tool_definitions,  # type: ignore
                 tool_choice="auto",
+                reasoning_effort="high",
             )
+            end = time.time()
             msg = response.choices[0].message
             msg_dict = msg.to_dict()
+            
+            if response.usage is not None:
+                print(response.usage.model_dump_json())
+                delta = end - start
+                print(f"{response.usage.completion_tokens / delta} tokens per second")
+                
 
             if "reasoning" in msg_dict:
                 print(f"[REASONING] Ticket {self.ticket_id}: {msg_dict['reasoning']}")

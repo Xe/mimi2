@@ -55,7 +55,7 @@ class ToolUsage:
 class ConversationDB:
     """Database manager for conversation persistence."""
     
-    def __init__(self, db_path: str = "./var/conversations.db"):
+    def __init__(self, db_path: str = "./var/discord_conversations.db"):
         """Initialize the database connection."""
         self.db_path = db_path
         # Ensure the directory exists
