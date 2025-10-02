@@ -1,6 +1,6 @@
 # Stage 1: Builder
 # This stage installs dependencies into a virtual environment.
-FROM python:3.12-slim as builder
+FROM python:3.13-slim as builder
 
 # Install uv, the package manager used by this project
 RUN pip install uv
@@ -21,7 +21,7 @@ RUN uv sync --no-cache
 
 # Stage 2: Runner
 # This stage copies the application code and the virtual environment.
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Set the working directory
 WORKDIR /app
